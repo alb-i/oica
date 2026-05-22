@@ -1,0 +1,6 @@
+numpy>=1.22
+scipy>=1.9
+scikit-learn>=1.1
+matplotlib>=3.5
+# Optional: only needed for the phase-transition reproduction script.
+# cvxpy>=1.3
