@@ -74,7 +74,54 @@ Returns `(ds_est, Ds_est, times, Hs)`:
 * `overica/sampling.py` – synthetic data sampling utilities.
 * `overica/evaluation.py` – error metrics (`a_error`, `f_error`,
   `evaluation_perf`, `evaluation_recovery`).
+* `overica/comparators.py` – baseline algorithms used by the reproduction
+  scripts (currently `fourier_pca`).
 * `examples/demo.py` – end-to-end demo.
+* `examples/_experiments.py` – shared experiment + plotting infrastructure
+  (ports of `scripts/experiment_*.m`).
+* `examples/reproduce_fig_1_phase_transition.py` – Figure 1 (CVXPY-based
+  SDP phase transition).
+* `examples/reproduce_fig_2_3_6_7_synthetic_exps.py` – Figures 2, 3, 6, 7
+  (synthetic experiments comparing OverICA against Fourier PCA and RAND).
+* `examples/reproduce_fig_4_patches_atoms.py` – Figure 4 (atoms learned
+  from CIFAR-10 image patches).
+
+## Reproducing the paper figures
+
+Each `reproduce_*.py` script is a port of the corresponding MATLAB
+`reproduce_*.m`. By default they run a *small* configuration so the demo
+finishes on a laptop in minutes rather than hours; pass `--full` to switch
+to the paper-scale grid (slow). Cached intermediate results land in
+`examples/expres/` (also `.gitignore`d).
+
+```bash
+cd py
+
+# Figure 1 — phase transition of the OverICA SDP.
+# Requires CVXPY: `pip install cvxpy`.
+python examples/reproduce_fig_1_phase_transition.py            # quick demo
+python examples/reproduce_fig_1_phase_transition.py --full     # paper-scale
+
+# Figures 2, 3, 6, 7 — synthetic comparisons against Fourier PCA and RAND.
+# FOOBI (proprietary) is skipped with a warning.
+python examples/reproduce_fig_2_3_6_7_synthetic_exps.py
+python examples/reproduce_fig_2_3_6_7_synthetic_exps.py --only fig2
+python examples/reproduce_fig_2_3_6_7_synthetic_exps.py --full
+
+# Figure 4 — atoms learned from CIFAR-10 patches.
+# Without --data, a synthetic stand-in is used for a smoke test.
+python examples/reproduce_fig_4_patches_atoms.py \\
+    --data /path/to/cifar-10-batches-py/data_batch_1
+```
+
+Notes on dependencies / caveats:
+
+* **CVXPY** is only required for the phase-transition script; it is listed
+  commented-out in `requirements.txt` so the core install stays light.
+* **FOOBI** is proprietary (only a README is bundled in the parent
+  `comparison/foobi/`); the reproduction scripts skip it cleanly.
+* **CIFAR-10** must be downloaded from
+  https://www.cs.toronto.edu/~kriz/cifar.html (Python pickle format).
 
 ## Implementation notes
 
@@ -120,5 +167,10 @@ Highlights of the translation from MATLAB to Python:
 cd py
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-python examples/demo.py
+pip install cvxpy                                      # only needed for Figure 1
+
+python examples/demo.py                                # quick smoke test
+python examples/reproduce_fig_1_phase_transition.py    # Figure 1
+python examples/reproduce_fig_2_3_6_7_synthetic_exps.py --only fig2  # Figure 2
+python examples/reproduce_fig_4_patches_atoms.py       # Figure 4 (synthetic fallback)
 ```

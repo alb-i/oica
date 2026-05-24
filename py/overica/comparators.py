@@ -23,6 +23,42 @@ def _as_rng(rng) -> np.random.Generator:
     return np.random.default_rng(rng)
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: comparison/fpca/fourier_pca2.m
+#
+#   function ds = fourier_pca2(X, k)
+#     [p,~] = size(X);                                  % p = observed dimension
+#     u = randn(p,1); u = u/norm(u);                    % random unit-norm direction
+#     Q = genquadricov(X, u);                           % generalized 4th-order cumulant at u (complex)
+#     Q1 = real(Q); Q2 = imag(Q);                       % split into real / imag parts
+#     [W,S,~] = svd(Q1);                                % SVD of the real part
+#     [~,inds] = sort(diag(S),'descend');               % ensure descending order
+#     W = W(:,inds);                                    %   (svd returns them sorted already; defensive)
+#     W = W(:,1:k);                                     % keep the top-k left singular vectors
+#     q1 = W'*Q1*W;                                     % project Q1 into W-basis (k×k)
+#     q2 = W'*Q2*W;                                     % same for Q2
+#     M = q1/q2;                                        % matrix right-division: M = q1 · inv(q2)
+#     [V,~] = eig(M);                                   % eigendecomposition of M
+#     C = W*V;                                          % candidate atoms (complex, in p-space)
+#     for j = 1:k                                       % phase-correct each column:
+#       c = C(:,j);
+#       a = real(c); b = imag(c);
+#       theta = atan( -( 2 * sum(a.*b) ) / sum( a.^2 - b.^2 ) )/2;   % optimal rotation
+#       while theta<0, theta = theta + pi; end          %   wrap into [0, 2π)
+#       while theta>2*pi, theta = theta - pi; end
+#       temp = real(exp(1i*theta)*c);                   %   rotate so the imag part vanishes
+#       C(:,j) = temp/norm(temp);                       %   normalize to unit norm
+#     end
+#     ds = zeros(p,k);
+#     for j = 1:k                                       % atom recovery from rank-1 matrix:
+#       c = C(:,j);
+#       [v,s,~] = svd( reshape(c,p,p) );                %   SVD of unflattened p×p matrix
+#       [~,inds] = sort(diag(s), 'descend');
+#       v = v(:,inds);
+#       ds(:,j) = v(:,1);                               %   keep leading left singular vector
+#     end
+#   end                                                 % end function
+# ----------------------------------------------------------------------------
 def fourier_pca(X: np.ndarray, k: int, *, rng=None) -> np.ndarray:
     """Fourier PCA (FPCA) overcomplete ICA baseline.
 

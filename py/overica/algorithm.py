@@ -1,4 +1,9 @@
-"""Top-level ``overica`` driver function."""
+"""Top-level ``overica`` driver function.
+
+The Python function below mirrors the MATLAB ``overica.m`` driver. Each
+helper / branch is preceded by a comment block containing the corresponding
+MATLAB source (verbatim), annotated line-by-line.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +17,47 @@ from .cumulants import gencov, quadricov
 from .sdp import sdp_adaptive, sdp_cluster, sdp_semiada
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``set_default_opts`` inside overica.m
+#
+#   function opts = set_default_opts
+#     opts.('sub') = 'gencov';                          % default subspace estimator
+#     opts.('sdp') = 'semiada';                         % default deflation strategy
+#   end
+# ----------------------------------------------------------------------------
 _DEFAULT_OPTS: dict[str, Any] = {"sub": "gencov", "sdp": "semiada"}
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``check_opts`` inside overica.m
+#
+#   function opts = check_opts(opts)
+#     if ~isstruct(opts), opts = set_default_opts; end                  % must be a struct
+#     if ~isfield( opts, 'sub' ), opts.('sub') = 'gencov'; end          % default sub
+#     if ~isfield( opts, 'sdp' ), opts.('sdp') = 'semiada'; end         % default sdp
+#     if isfield( opts, 'ctype' )                                       % validate ctype
+#       ctype = opts.ctype;
+#       if ~( strcmp( ctype, 'h' ) || strcmp( ctype, 'km' ) )
+#         disp('The opts.ctype value is changed to h')
+#         opts.('ctype') = 'h';
+#       end
+#     end
+#     if isfield( opts, 'sub' )                                         % validate sub
+#       sub = opts.sub;
+#       if ~( strcmp( sub, 'quad' ) || strcmp( sub, 'gencov' ) )
+#         disp('The opts.sub value is changed to gencov')
+#         opts.('sub') = 'gencov';
+#       end
+#     end
+#     if isfield( opts, 'sdp' )                                         % validate sdp
+#       sdp = opts.sdp;
+#       if ~( strcmp( sdp, 'ada' ) || strcmp( sdp, 'semiada' ) || strcmp( sdp, 'clust' ) )
+#         disp('The opts.sdp value is changed to semiada')
+#         opts.sdp = 'semiada';
+#       end
+#     end
+#   end
+# ----------------------------------------------------------------------------
 def _check_opts(opts: dict[str, Any] | None) -> dict[str, Any]:
     if opts is None or not isinstance(opts, dict):
         return dict(_DEFAULT_OPTS)
@@ -33,6 +76,23 @@ def _check_opts(opts: dict[str, Any] | None) -> dict[str, Any]:
     return opts
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``estimate_gencovs`` inside overica.m
+#
+#   function C = estimate_gencovs(X, s, t0)
+#     [p, n] = size(X);                                 % p = obs dim, n = samples
+#     t = t0;                                           % per-iteration scale
+#     C = zeros(p^2, s);                                % preallocate gencov columns
+#     G0 = gencov(X,zeros(p,1)); G0 = G0(:);            % baseline G(0) (= covariance)
+#     for i = 1:s
+#       omega = randn(p,1);                             %   random direction
+#       if t0 == -1, t = choose_t(X'*omega, n/20); end  %   special: auto-pick t (rarely used)
+#       omega = t*omega;                                %   rescale direction
+#       Gi = gencov(X,omega);                           %   evaluate generalized covariance
+#       C(:,i) = Gi(:) - G0;                            %   store the *difference* from G(0)
+#     end                                               %   (subtraction kills the Gaussian part)
+#   end
+# ----------------------------------------------------------------------------
 def _estimate_gencovs(
     X: np.ndarray, s: int, t0: float, rng: np.random.Generator
 ) -> np.ndarray:
@@ -51,6 +111,67 @@ def _estimate_gencovs(
     return C
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: overica.m (top-level driver)
+#
+#   function [ds_est, Ds_est, times, Hs] = overica( X, k, opts )
+#     if ~( nargin==2 || nargin==3), error('Wrong number of inputs'); end
+#     if nargin==2, opts = set_default_opts; end        % fill in defaults
+#     if nargin==3, opts = check_opts(opts); end        % validate user options
+#     globtt = tic;                                     % start global timer
+#     % ---- Stage 1: subspace estimator (cumulant) ----
+#     if strcmp( opts.sub, 'quad' )                     % fourth-order cumulant branch
+#       disp('Computing quadricovariance')
+#       tt=tic; C = quadricov(X); toc(tt)               %   C is p²×p² (symmetric)
+#     end
+#     if strcmp( opts.sub, 'gencov' )                   % generalized-covariance branch
+#       disp('Computing generalized covariances')
+#       tt = tic;
+#       s = 5*k;                                        %   default: 5·k gencovs
+#       t = 0.05/sqrt( max( max( abs( cov(X') ) ) ) );  %   default scale: tied to data variance
+#       if isfield( opts, 's' ), s = opts.s*k; end      %   user override for #gencovs
+#       if isfield( opts, 't' ), t = opts.t; end        %   user override for scale
+#       C = estimate_gencovs(X, s, t);                  %   C is p²×s
+#       toc(tt)
+#     end
+#     toc(globtt)
+#     cum_time = toc(globtt);                           % time spent on cumulant
+#     % ---- Stage 2: SVD to get the subspace basis Hs ----
+#     disp('Computing SVD')
+#     [CU,~,~] = svds(C,k);                             % top-k left singular vectors
+#     Hs = CU(:, 1:k);                                  % p²×k orthonormal basis
+#     toc(globtt)
+#     svd_time = toc(globtt) - cum_time;                % time spent on SVD
+#     % ---- Stage 3: deflation (clust / ada / semiada) ----
+#     if strcmp( opts.sdp, 'clust' )
+#       disp('Deflation via clustering')
+#       if isfield( opts, 'ctype' )
+#         [ds_est, Ds_est] = sdp_cluster(Hs, k, opts.ctype);
+#       else
+#         [ds_est, Ds_est] = sdp_cluster(Hs, k);
+#       end
+#     end
+#     if strcmp( opts.sdp, 'ada' )
+#       disp('Adaptive deflation')
+#       [ds_est, Ds_est] = sdp_adaptive(Hs, k);
+#     end
+#     if strcmp( opts.sdp, 'semiada' )
+#       disp('Semiadaptive deflation')
+#       if isfield( opts, 'ctype' )
+#         [ds_est, Ds_est] = sdp_semiada(Hs, k, opts.ctype);
+#       else
+#         [ds_est, Ds_est] = sdp_semiada(Hs, k);
+#       end
+#     end
+#     toc(globtt)
+#     sdp_time = toc(globtt) - cum_time - svd_time;     % time spent on deflation
+#     total_time = toc(globtt);
+#     times.('total_time') = total_time;                % return per-stage timings
+#     times.('cum_time')   = cum_time;
+#     times.('svd_time')   = svd_time;
+#     times.('sdp_time')   = sdp_time;
+#   end
+# ----------------------------------------------------------------------------
 def overica(
     X: np.ndarray,
     k: int,

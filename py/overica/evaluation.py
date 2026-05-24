@@ -1,4 +1,8 @@
-"""Atom-recovery error metrics (port of the MATLAB ``helpers/`` evaluation)."""
+"""Atom-recovery error metrics (port of the MATLAB ``helpers/`` evaluation).
+
+Each public Python function is preceded by a comment block containing the
+corresponding MATLAB source (verbatim), annotated line-by-line.
+"""
 
 from __future__ import annotations
 
@@ -6,12 +10,37 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested helper ``normalize_2`` used by several .m files
+#
+#   function ds = normalize_2(ds)
+#     k = size(ds,2);                                   % number of columns
+#     for i = 1:k                                       % rescale each column to unit ℓ²-norm
+#       ds(:,i) = ds(:,i) / norm(ds(:,i));
+#     end
+#   end
+# ----------------------------------------------------------------------------
 def _normalize_2(ds: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(ds, axis=0, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     return ds / norms
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested helper ``update_ds_est`` used by several .m files
+#
+#   function [ds_est, perfout] = update_ds_est(ds_est, ds, perm)
+#     k = size(ds_est, 2);                              % number of atoms
+#     ds_est = ds_est(:, perm);                         % reorder to align with ds
+#     signs = zeros(k,1);
+#     for i = 1:k                                       % for each aligned column:
+#       signi = sign( ds_est(:,i)' * ds(:,i) );         %   sign(<d_est_i, d_i>)
+#       signs(i) = signi;                               %   remember the flip
+#       ds_est(:,i) = ds_est(:,i) * signi;              %   apply the sign flip
+#     end
+#     perfout = struct('ds_est', ds_est, 'perm', perm, 'signs', signs);   % return audit info
+#   end
+# ----------------------------------------------------------------------------
 def _update_ds_est(ds_est: np.ndarray, ds: np.ndarray, perm: np.ndarray):
     ds_est = ds_est[:, perm]
     signs = np.sign(np.einsum("ij,ij->j", ds_est, ds))
@@ -20,6 +49,25 @@ def _update_ds_est(ds_est: np.ndarray, ds: np.ndarray, perm: np.ndarray):
     return ds_est, {"ds_est": ds_est, "perm": perm, "signs": signs}
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``perf_l2`` inside helpers/evaluation_perf.m
+#
+#   function [perf, perfout] = perf_l2(ds_est, ds)
+#     k = size(ds,2);                                   % number of atoms
+#     F = zeros(k);                                     % cost matrix for Hungarian matching
+#     for i=1:k
+#       for j=1:k
+#         sij = sign( ds_est(:,i)'*ds(:,j) );           %   align signs
+#         F(i,j) = norm( sij*ds_est(:,i) - ds(:,j), 2); %   ℓ²-distance after sign flip
+#       end
+#     end
+#     [matching, cost] = HungarianBipartiteMatching(F); % minimum-weight bipartite matching
+#     [perm, ~] = find(sparse(matching));               % extract column permutation
+#     [~, perfout] = update_ds_est(ds_est, ds, perm);   % reorder/sign-flip ds_est
+#     perf = cost/k;                                    % mean per-atom ℓ²-error
+#     perf = perf/sqrt(2);                              % rescale to [0, 1]
+#   end
+# ----------------------------------------------------------------------------
 def _perf_l2(ds_est: np.ndarray, ds: np.ndarray):
     k = ds.shape[1]
     F = np.zeros((k, k))
@@ -37,6 +85,16 @@ def _perf_l2(ds_est: np.ndarray, ds: np.ndarray):
     return perf, perfout
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``perf_fro`` inside helpers/evaluation_perf.m
+#
+#   function [perf, perfout] = perf_fro(ds_est, ds)
+#     matching = HungarianBipartiteMatching(-abs(ds_est'*ds));   % maximize |cosine|
+#     [perm, ~] = find(sparse(matching));
+#     [ds_est, perfout] = update_ds_est(ds_est, ds, perm);
+#     perf = norm(ds_est-ds,'fro').^2 / norm(ds,'fro').^2;       % squared Frobenius (relative)
+#   end
+# ----------------------------------------------------------------------------
 def _perf_fro(ds_est: np.ndarray, ds: np.ndarray):
     F = -np.abs(ds_est.T @ ds)
     row, col = linear_sum_assignment(F)
@@ -46,6 +104,25 @@ def _perf_fro(ds_est: np.ndarray, ds: np.ndarray):
     return float(perf), perfout
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``perf_l1`` inside helpers/evaluation_perf.m
+#
+#   function [perf, perfout] = perf_l1(ds_est, ds)
+#     k = size(ds,2);
+#     F = zeros(k);                                     % cost matrix (ℓ¹-distances after sign flip)
+#     for i = 1:k
+#       for j = 1:k
+#         sij = sign( ds_est(:,i)'*ds(:,j) );
+#         F(i,j) = norm( sij*ds_est(:,i)-ds(:,j), 1);
+#       end
+#     end
+#     [matching, cost] = HungarianBipartiteMatching(F);
+#     [perm, ~] = find(sparse(matching));
+#     [~, perfout] = update_ds_est(ds_est, ds, perm);
+#     perf = cost/k;                                    % mean per-atom ℓ¹-distance
+#     perf = perf/2;                                    % rescale to [0, 1]
+#   end
+# ----------------------------------------------------------------------------
 def _perf_l1(ds_est: np.ndarray, ds: np.ndarray):
     k = ds.shape[1]
     F = np.zeros((k, k))
@@ -63,6 +140,27 @@ def _perf_l1(ds_est: np.ndarray, ds: np.ndarray):
     return float(perf), perfout
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: nested ``perf_cos`` inside helpers/evaluation_perf.m
+#
+#   function [perf, perfout] = perf_cos(ds_est, ds)
+#     k = size(ds,2);
+#     F = zeros(k,k);                                   % angular-distance cost matrix
+#     for i = 1:k
+#       for j = 1:k
+#         cosij = abs( ds_est(:,i)'*ds(:,j) ) / ...     %   |cos(angle)| between atoms
+#                  ( norm(ds_est(:,i)) * norm(ds(:,j)) );
+#         loc = acos( cosij );                          %   angular distance
+#         F(i,j) = real(loc);                           %   guard against tiny imag noise
+#       end
+#     end
+#     [matching, cost] = HungarianBipartiteMatching(F);
+#     [perm, ~] = find(sparse(matching));
+#     [~, perfout] = update_ds_est(ds_est, ds, perm);
+#     perf = 2*cost/pi;                                 % rescale total angle to [0, k]
+#     perf = perf/k;                                    % per-atom mean, in [0, 1]
+#   end
+# ----------------------------------------------------------------------------
 def _perf_cos(ds_est: np.ndarray, ds: np.ndarray):
     k = ds.shape[1]
     norms_e = np.linalg.norm(ds_est, axis=0)
@@ -82,6 +180,28 @@ def _perf_cos(ds_est: np.ndarray, ds: np.ndarray):
 _PERF_FNS = {1: _perf_l1, 2: _perf_l2, 3: _perf_fro, 4: _perf_cos}
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: helpers/evaluation_perf.m (driver)
+#
+#   function [perf, perfout] = evaluation_perf(ds_est, ds, perf_type)
+#     if ~( (nargin==2) || (nargin==3) )                % require 2 or 3 inputs
+#       error('perf: wrong input')
+#     end
+#     if sum( sum( size(ds_est) == size(ds) ) ) ~= 2    % shapes must match exactly
+#       error('perf: wrong input')
+#     end
+#     if nargin==2, perf_type = 2; end                  % default = ℓ²-metric
+#     ds = normalize_2(ds);                             % unit-norm both
+#     ds_est = normalize_2(ds_est);
+#     switch perf_type                                  % dispatch on metric:
+#       case 1, [perf, perfout] = perf_l1(ds_est, ds);
+#       case 2, [perf, perfout] = perf_l2(ds_est, ds);
+#       case 3, [perf, perfout] = perf_fro(ds_est, ds);
+#       case 4, [perf, perfout] = perf_cos(ds_est, ds);
+#       otherwise, error('perf: specify type!')
+#     end
+#   end
+# ----------------------------------------------------------------------------
 def evaluation_perf(ds_est: np.ndarray, ds: np.ndarray, perf_type: int = 2):
     """Atom-recovery error after optimal sign-aware bipartite matching.
 
@@ -101,16 +221,50 @@ def evaluation_perf(ds_est: np.ndarray, ds: np.ndarray, perf_type: int = 2):
     return _PERF_FNS[perf_type](ds_est, ds)
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: helpers/a_error.m
+#
+#   function [perf, perfout] = a_error(ds_est, ds)
+#     perf_type = 4;                                    % cosine / angular metric
+#     [perf, perfout] = evaluation_perf(ds_est, ds, perf_type);
+#   end
+# ----------------------------------------------------------------------------
 def a_error(ds_est: np.ndarray, ds: np.ndarray):
     """Angular (cosine) error, scaled to ``[0, 1]``."""
     return evaluation_perf(ds_est, ds, perf_type=4)
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: helpers/f_error.m
+#
+#   function [perf, perfout] = f_error(ds_est, ds)
+#     perf_type = 3;                                    % squared Frobenius metric
+#     [perf, perfout] = evaluation_perf(ds_est, ds, perf_type);
+#   end
+# ----------------------------------------------------------------------------
 def f_error(ds_est: np.ndarray, ds: np.ndarray):
     """Squared Frobenius error (relative)."""
     return evaluation_perf(ds_est, ds, perf_type=3)
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: helpers/evaluation_recovery.m
+#
+#   function [nrec, recov, perfout] = evaluation_recovery(ds_est, ds, th)
+#     if nargin ~= 3, error('wrong input'); end
+#     ds = normalize_2(ds);                             % unit-norm both
+#     ds_est = normalize_2(ds_est);
+#     [perf, perfout] = perf_cos(ds_est,ds);            % angular errors of matched atoms
+#     k = size(ds, 2);
+#     recov = zeros(k,1);                               % per-rank recovery indicator
+#     for i = 1:k
+#       recov(i) = sum( perf < th ) >= i;               %   1 iff ≥ i atoms below threshold
+#     end
+#     nrec = sum( perf < th );                          % total number recovered
+#   end
+# (Note: the inner ``perf_cos`` here builds ``test`` — the vector of per-atom
+# angles — and returns it as ``perf``, hence ``sum( perf < th )`` counts atoms.)
+# ----------------------------------------------------------------------------
 def evaluation_recovery(ds_est: np.ndarray, ds: np.ndarray, th: float):
     """Count how many atoms of ``ds`` are recovered within angular threshold ``th``.
 

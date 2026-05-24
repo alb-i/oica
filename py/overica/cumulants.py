@@ -4,6 +4,9 @@ All functions operate on data matrices ``X`` of shape ``(p, n)`` (observations
 in columns), matching the original MATLAB convention.
 
 Throughout, ``vec(M)`` means column-major flattening (MATLAB's ``M(:)``).
+
+Every Python function below is preceded by a comment block containing the
+corresponding MATLAB source (verbatim), annotated line-by-line.
 """
 
 from __future__ import annotations
@@ -16,6 +19,25 @@ def _vec_F(M: np.ndarray) -> np.ndarray:
     return np.asarray(M).reshape(-1, order="F")
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: cumulants/gencov.m
+#
+#   function C = gencov(X, omega)
+#     if numel(omega)==1                                % if omega is a scalar:
+#       p = size(X,1);                                  %   read off the observed dim p
+#       omega = omega*ones(p,1)/p;                      %   replace with that scalar / p, broadcast to ℝᵖ
+#     end                                               % end scalar-handling branch
+#     n = size(X,2);                                    % n = number of observations
+#     proj = X'*omega;                                  % proj ∈ ℝⁿ: projection of each obs onto omega
+#     eproj = exp(proj);                                % exponential reweighting (one weight per obs)
+#     % genexp                                          % (comment in original: "generalized expectation")
+#     Eomega = (X*eproj) / sum(eproj);                  % weighted mean E_ω[X] ∈ ℝᵖ
+#     C = X*sparse(1:n,1:n,eproj)*X' ;                  % X · diag(eproj) · X' (sparse for speed)
+#     C = C / sum(eproj);                               % normalize to weighted E_ω[X X']
+#     C = C - Eomega * Eomega';                         % subtract outer product of the weighted mean
+#     C = C(:);                                         % return as column-major vec, shape p²×1
+#   end                                                 % end function
+# ----------------------------------------------------------------------------
 def gencov(X: np.ndarray, omega: np.ndarray | float) -> np.ndarray:
     """Generalized covariance at point ``omega``, returned as ``vec(C)``.
 
@@ -51,6 +73,34 @@ def gencov(X: np.ndarray, omega: np.ndarray | float) -> np.ndarray:
     return _vec_F(C)
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference (driver): cumulants/quadricov.m
+#
+#   function Q = quadricov(X)
+#     X = X - repmat(mean(X,2), 1, size(X,2));          % centre each row to zero mean
+#     Q = quadricov_in(X);                              % call the MEX kernel (upper-triangular cumulant)
+#     Q = (Q - diag(diag(Q)))' + Q;                     % mirror upper-tri to lower (avoid doubling diag)
+#   end                                                 % end function
+#
+# MATLAB reference (kernel): cumulants/quadricov_in.cpp
+#   /* Computes upper-triangular part of the matricized 4-th order cumulant. */
+#   for (i = 0; i < n; i++) {                           // for each observation:
+#     for (a, b in [0..p)²) {                           //   for each (a,b) pair:
+#       tt = data[i][a] * data[i][b];                   //     tt = x_{i,a} · x_{i,b}
+#       C[a][b] += tt;                                  //     accumulate biased covariance
+#       temp[a + b*p] = tt;                             //     store vec(x_i x_i^T) entry (col-major)
+#     }
+#     for (a, b in upper triangle of [0..p²)²)          //   for each upper-tri (a,b):
+#       Q[a][b] += temp[a] * temp[b];                   //     accumulate outer products
+#   }
+#   C /= n;                                             // normalize C and Q (raw 4-th moment)
+#   Q /= n;
+#   for (a, b, c, d in [0..p)⁴) {                       // subtract Gaussian "Wick" terms:
+#     Q[a+b*p][c+d*p] -= C[a][b]*C[c][d]                //   - <x_a x_b> <x_c x_d>
+#                      + C[a][c]*C[b][d]                //   - <x_a x_c> <x_b x_d>
+#                      + C[a][d]*C[b][c];               //   - <x_a x_d> <x_b x_c>
+#   }                                                   // (computed only for upper triangle)
+# ----------------------------------------------------------------------------
 def quadricov(X: np.ndarray) -> np.ndarray:
     """Fourth-order cumulant (quadricovariance) of centred data.
 
@@ -87,6 +137,40 @@ def quadricov(X: np.ndarray) -> np.ndarray:
     return M4 - term1 - C_ac_bd - C_ad_bc
 
 
+# ----------------------------------------------------------------------------
+# MATLAB reference: cumulants/genquadricov.m
+#
+#   function Q = genquadricov(X, u)
+#     [p,N] = size(X);                                  % p = obs dim, N = number of samples
+#     Xu = X'*u;                                        % Xu(n) = u'·x_n, shape (N,)
+#     expXu = exp(1i*Xu);                               % complex weights e^{i u'x_n}
+#     M0 = sum( expXu ) / N;                            % characteristic function value at u
+#     M1 = (X * expXu ) / (N*M0);                       % generalized 1st moment ("mean")
+#     XC = X - repmat( M1, 1, N );                      % "generalized zero-mean" data
+#     M2 = zeros(p);                                    % accumulator for generalized 2nd moment
+#     M4 = zeros(p*p);                                  % accumulator for generalized 4th moment
+#     temp = zeros(p);                                  % scratch p×p matrix
+#     for n = 1:N                                       % for each observation:
+#       xn = XC(:,n);                                   %   centred sample
+#       temp = xn*conj(ctranspose(xn));                 %   xn · xnᵀ  (note: transpose, NOT conj-transpose;
+#                                                       %    MATLAB's ' is conj-transpose, hence the conj)
+#       M2 = M2 + expXu(n)*temp;                        %   weight by characteristic-func value
+#       M4 = M4 + (expXu(n)*temp(:))*conj(ctranspose(temp(:)));  %   outer product of vec(xx')
+#     end                                               % end loop
+#     M2 = M2 / (N*M0); M4 = M4 / (N*M0);               % normalize
+#     Q = zeros(p*p);                                   % preallocate cumulant
+#     for i3 = 1:p                                      % for each (i3, i4) index pair:
+#       for i4 = 1:p
+#         icol = (i3-1)*p+i4;                           %   column-major linear index of (i3,i4)
+#         temp(:) = M4(:,icol);                         %   pull out the matching column of M4
+#         temp = temp - M2(i3,i4)*M2 ...                %   subtract the three M2-product (Wick) terms;
+#                    - M2(:,i3)*M2(i4,:) ...            %   uses M2 symmetric, so M2' is dropped here
+#                    - M2(:,i4)*M2(i3,:);
+#         Q(:,icol) = temp(:);                          %   store into output column
+#       end
+#     end
+#   end                                                 % end function (returns complex p²×p²)
+# ----------------------------------------------------------------------------
 def genquadricov(X: np.ndarray, u: np.ndarray) -> np.ndarray:
     """Fourth-order generalized cumulant at point ``u`` (complex-valued).
 
