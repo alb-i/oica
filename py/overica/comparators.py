@@ -6,6 +6,9 @@ The MATLAB code base also references FOOBI (Lieven De Lathauwer's algorithm),
 but the actual implementation is *not* included in this repository (only a
 README pointing at the author). We therefore do not provide a Python FOOBI;
 the reproduction scripts skip it gracefully when it isn't installed.
+
+Inline ``# MATLAB: ...`` comments in the body of :func:`fourier_pca` map each
+Python statement back to the corresponding line of ``fourier_pca2.m``.
 """
 
 from __future__ import annotations
@@ -78,50 +81,52 @@ def fourier_pca(X: np.ndarray, k: int, *, rng=None) -> np.ndarray:
     """
     rng = _as_rng(rng)
     X = np.asarray(X, dtype=float)
-    p, _ = X.shape
+    p, _ = X.shape                                           # MATLAB: [p,~] = size(X)
 
-    u = rng.standard_normal(p)
-    u = u / np.linalg.norm(u)
+    u = rng.standard_normal(p)                               # MATLAB: u = randn(p,1)
+    u = u / np.linalg.norm(u)                                # MATLAB: u = u/norm(u)
 
-    Q = genquadricov(X, u)
-    Q1 = Q.real
-    Q2 = Q.imag
+    Q = genquadricov(X, u)                                   # MATLAB: Q = genquadricov(X, u)   (complex)
+    Q1 = Q.real                                              # MATLAB: Q1 = real(Q)
+    Q2 = Q.imag                                              # MATLAB: Q2 = imag(Q)
 
-    W, S, _ = np.linalg.svd(Q1, full_matrices=False)
-    W = W[:, :k]
+    # SVD of the real part; numpy returns singular values already sorted
+    # descending, so we skip the explicit MATLAB ``sort(diag(S),'descend')``.
+    W, S, _ = np.linalg.svd(Q1, full_matrices=False)         # MATLAB: [W,S,~] = svd(Q1)
+    W = W[:, :k]                                             # MATLAB: W = W(:,1:k)  (top-k subspace)
 
-    q1 = W.T @ Q1 @ W
-    q2 = W.T @ Q2 @ W
+    q1 = W.T @ Q1 @ W                                        # MATLAB: q1 = W'*Q1*W
+    q2 = W.T @ Q2 @ W                                        # MATLAB: q2 = W'*Q2*W
 
     # MATLAB ``q1/q2`` is right-division: q1 * inv(q2). Solve M q2 = q1.
-    M = np.linalg.solve(q2.T, q1.T).T
+    M = np.linalg.solve(q2.T, q1.T).T                        # MATLAB: M = q1/q2
 
-    _, V = np.linalg.eig(M)
-    C = W @ V  # (p, k), complex
+    _, V = np.linalg.eig(M)                                  # MATLAB: [V,~] = eig(M)
+    C = W @ V                                                # MATLAB: C = W*V   (p×k, complex atoms)
 
-    for j in range(k):
-        c = C[:, j]
-        a = c.real
-        b = c.imag
-        denom = float(np.sum(a * a - b * b))
-        num = -2.0 * float(np.sum(a * b))
-        # Avoid the degenerate denom == 0 case (atan handles inf gracefully,
-        # but we still want a sane phase).
-        theta = np.arctan2(num, denom) / 2.0 if denom != 0 else (np.pi / 4.0)
-        while theta < 0:
+    for j in range(k):                                       # MATLAB: for j = 1:k   (phase-correct each col)
+        c = C[:, j]                                          # MATLAB: c = C(:,j)
+        a = c.real                                           # MATLAB: a = real(c)
+        b = c.imag                                           # MATLAB: b = imag(c)
+        denom = float(np.sum(a * a - b * b))                 # MATLAB: sum(a.^2 - b.^2)
+        num = -2.0 * float(np.sum(a * b))                    # MATLAB: -2*sum(a.*b)
+        # MATLAB uses atan(num/denom); we use atan2 to avoid blow-up when
+        # denom == 0. The result is the same modulo the wrap-around below.
+        theta = np.arctan2(num, denom) / 2.0 if denom != 0 else (np.pi / 4.0)  # MATLAB: theta = atan(...)/2
+        while theta < 0:                                     # MATLAB: while theta<0, theta = theta+pi; end
             theta += np.pi
-        while theta > 2 * np.pi:
+        while theta > 2 * np.pi:                             # MATLAB: while theta>2*pi, theta = theta-pi; end
             theta -= np.pi
-        tmp = (np.exp(1j * theta) * c).real
+        tmp = (np.exp(1j * theta) * c).real                  # MATLAB: temp = real(exp(1i*theta)*c)
         norm = np.linalg.norm(tmp)
-        if norm > 0:
-            C[:, j] = tmp / norm
+        if norm > 0:                                         # (defensive: avoid div-by-zero)
+            C[:, j] = tmp / norm                             # MATLAB: C(:,j) = temp/norm(temp)
 
-    ds = np.zeros((p, k))
-    for j in range(k):
+    ds = np.zeros((p, k))                                    # MATLAB: ds = zeros(p,k)
+    for j in range(k):                                       # MATLAB: for j = 1:k  (recover atoms via SVD)
         c = C[:, j].real
-        rmat = c.reshape(p, p, order="F")
-        u_svd, _, _ = np.linalg.svd(rmat, full_matrices=False)
-        ds[:, j] = u_svd[:, 0]
+        rmat = c.reshape(p, p, order="F")                    # MATLAB: reshape(c, p, p)  (col-major)
+        u_svd, _, _ = np.linalg.svd(rmat, full_matrices=False)  # MATLAB: [v,s,~] = svd(...)
+        ds[:, j] = u_svd[:, 0]                               # MATLAB: ds(:,j) = v(:,1)  (top left singular vec)
 
     return ds

@@ -2,7 +2,9 @@
 
 The Python function below mirrors the MATLAB ``overica.m`` driver. Each
 helper / branch is preceded by a comment block containing the corresponding
-MATLAB source (verbatim), annotated line-by-line.
+MATLAB source (verbatim), annotated line-by-line. Inline ``# MATLAB: ...``
+comments inside each body map each Python statement back to its MATLAB
+counterpart.
 """
 
 from __future__ import annotations
@@ -59,18 +61,18 @@ _DEFAULT_OPTS: dict[str, Any] = {"sub": "gencov", "sdp": "semiada"}
 #   end
 # ----------------------------------------------------------------------------
 def _check_opts(opts: dict[str, Any] | None) -> dict[str, Any]:
-    if opts is None or not isinstance(opts, dict):
+    if opts is None or not isinstance(opts, dict):           # MATLAB: if ~isstruct(opts), opts = set_default_opts; end
         return dict(_DEFAULT_OPTS)
     opts = dict(opts)
-    opts.setdefault("sub", "gencov")
-    opts.setdefault("sdp", "semiada")
-    if opts["sub"] not in ("quad", "gencov"):
+    opts.setdefault("sub", "gencov")                         # MATLAB: if ~isfield(opts,'sub'), opts.sub = 'gencov'
+    opts.setdefault("sdp", "semiada")                        # MATLAB: if ~isfield(opts,'sdp'), opts.sdp = 'semiada'
+    if opts["sub"] not in ("quad", "gencov"):                # MATLAB: validate opts.sub ∈ {'quad','gencov'}
         print("The opts['sub'] value is changed to gencov")
         opts["sub"] = "gencov"
-    if opts["sdp"] not in ("ada", "semiada", "clust"):
+    if opts["sdp"] not in ("ada", "semiada", "clust"):       # MATLAB: validate opts.sdp ∈ {'ada','semiada','clust'}
         print("The opts['sdp'] value is changed to semiada")
         opts["sdp"] = "semiada"
-    if "ctype" in opts and opts["ctype"] not in ("h", "km"):
+    if "ctype" in opts and opts["ctype"] not in ("h", "km"): # MATLAB: validate opts.ctype ∈ {'h','km'}
         print("The opts['ctype'] value is changed to h")
         opts["ctype"] = "h"
     return opts
@@ -101,13 +103,15 @@ def _estimate_gencovs(
     Each column of the returned matrix is ``vec(G(t*omega_i)) - vec(G(0))``,
     where ``G(omega)`` is the generalized covariance evaluated at ``omega``.
     """
-    p, _ = X.shape
-    C = np.zeros((p * p, s))
-    G0 = gencov(X, np.zeros(p))
-    for i in range(s):
-        omega = rng.standard_normal(p)
-        Gi = gencov(X, t0 * omega)
-        C[:, i] = Gi - G0
+    p, _ = X.shape                                           # MATLAB: [p, n] = size(X)
+    C = np.zeros((p * p, s))                                 # MATLAB: C = zeros(p^2, s)
+    G0 = gencov(X, np.zeros(p))                              # MATLAB: G0 = gencov(X, zeros(p,1)); G0 = G0(:)
+    for i in range(s):                                       # MATLAB: for i = 1:s
+        omega = rng.standard_normal(p)                       # MATLAB: omega = randn(p,1)
+        # NB: the MATLAB ``t0 == -1`` (auto-pick) branch is not exposed in
+        # Python because it is essentially unused in the reference code.
+        Gi = gencov(X, t0 * omega)                           # MATLAB: omega = t*omega; Gi = gencov(X, omega)
+        C[:, i] = Gi - G0                                    # MATLAB: C(:,i) = Gi(:) - G0   (kills Gaussian part)
     return C
 
 
@@ -209,7 +213,7 @@ def overica(
     Hs : (p*p, k) ndarray
         Orthonormal basis of the estimated subspace.
     """
-    opts = _check_opts(opts)
+    opts = _check_opts(opts)                                 # MATLAB: opts = check_opts(opts)
 
     if isinstance(rng, np.random.Generator):
         rng_inst = rng
@@ -222,51 +226,57 @@ def overica(
 
     X = np.asarray(X, dtype=float)
 
-    glob_start = time.perf_counter()
+    glob_start = time.perf_counter()                         # MATLAB: globtt = tic
 
-    if opts["sub"] == "quad":
-        log("Computing quadricovariance")
-        t0 = time.perf_counter()
-        C = quadricov(X)
-        log(f"Elapsed: {time.perf_counter() - t0:.3f}s")
+    # ----- Stage 1: subspace estimator (cumulant) -----
+    if opts["sub"] == "quad":                                # MATLAB: if strcmp(opts.sub, 'quad')
+        log("Computing quadricovariance")                    # MATLAB: disp('Computing quadricovariance')
+        t0 = time.perf_counter()                             # MATLAB: tt = tic
+        C = quadricov(X)                                     # MATLAB: C = quadricov(X)
+        log(f"Elapsed: {time.perf_counter() - t0:.3f}s")     # MATLAB: toc(tt)
     else:
-        log("Computing generalized covariances")
-        t0 = time.perf_counter()
-        # MATLAB default: t = 0.05 / sqrt(max(max(abs(cov(X')))))
+        log("Computing generalized covariances")             # MATLAB: disp('Computing generalized covariances')
+        t0 = time.perf_counter()                             # MATLAB: tt = tic
+        # MATLAB: t = 0.05 / sqrt(max(max(abs(cov(X')))))
         covX = np.cov(X)
         t_default = 0.05 / np.sqrt(np.max(np.abs(covX)))
-        s = int(opts.get("s", 5)) * k
-        t = float(opts.get("t", t_default))
-        C = _estimate_gencovs(X, s, t, rng_inst)
-        log(f"Elapsed: {time.perf_counter() - t0:.3f}s")
+        s = int(opts.get("s", 5)) * k                        # MATLAB: s = 5*k;   if isfield(opts,'s'), s = opts.s*k
+        t = float(opts.get("t", t_default))                  # MATLAB: if isfield(opts,'t'), t = opts.t
+        C = _estimate_gencovs(X, s, t, rng_inst)             # MATLAB: C = estimate_gencovs(X, s, t)
+        log(f"Elapsed: {time.perf_counter() - t0:.3f}s")     # MATLAB: toc(tt)
 
-    cum_time = time.perf_counter() - glob_start
+    cum_time = time.perf_counter() - glob_start              # MATLAB: cum_time = toc(globtt)
     log(f"Cumulant stage: {cum_time:.3f}s")
 
-    log("Computing SVD")
-    U, _, _ = scipy.linalg.svd(C, full_matrices=False)
-    Hs = U[:, :k]
-    svd_time = time.perf_counter() - glob_start - cum_time
+    # ----- Stage 2: SVD to get the subspace basis Hs -----
+    log("Computing SVD")                                     # MATLAB: disp('Computing SVD')
+    U, _, _ = scipy.linalg.svd(C, full_matrices=False)       # MATLAB: [CU,~,~] = svds(C, k)
+    Hs = U[:, :k]                                            # MATLAB: Hs = CU(:, 1:k)
+    svd_time = time.perf_counter() - glob_start - cum_time   # MATLAB: svd_time = toc(globtt) - cum_time
     log(f"SVD stage: {svd_time:.3f}s")
 
+    # ----- Stage 3: deflation (clust / ada / semiada) -----
     sdp_mode = opts["sdp"]
     ctype = opts.get("ctype")
 
-    if sdp_mode == "clust":
-        log("Deflation via clustering")
+    if sdp_mode == "clust":                                  # MATLAB: if strcmp(opts.sdp, 'clust')
+        log("Deflation via clustering")                      # MATLAB: disp('Deflation via clustering')
         ds_est, Ds_est = sdp_cluster(Hs, k, ctype if ctype else "h", rng=rng_inst)
-    elif sdp_mode == "ada":
-        log("Adaptive deflation")
-        ds_est, Ds_est = sdp_adaptive(Hs, k)
-    else:  # 'semiada'
-        log("Semiadaptive deflation")
+                                                             # MATLAB: [ds_est, Ds_est] = sdp_cluster(Hs, k[, ctype])
+    elif sdp_mode == "ada":                                  # MATLAB: if strcmp(opts.sdp, 'ada')
+        log("Adaptive deflation")                            # MATLAB: disp('Adaptive deflation')
+        ds_est, Ds_est = sdp_adaptive(Hs, k)                 # MATLAB: [ds_est, Ds_est] = sdp_adaptive(Hs, k)
+    else:  # 'semiada'                                       # MATLAB: if strcmp(opts.sdp, 'semiada')
+        log("Semiadaptive deflation")                        # MATLAB: disp('Semiadaptive deflation')
         ds_est, Ds_est = sdp_semiada(Hs, k, ctype if ctype else "h", rng=rng_inst)
+                                                             # MATLAB: [ds_est, Ds_est] = sdp_semiada(Hs, k[, ctype])
 
-    sdp_time = time.perf_counter() - glob_start - cum_time - svd_time
-    total_time = time.perf_counter() - glob_start
+    sdp_time = time.perf_counter() - glob_start - cum_time - svd_time  # MATLAB: sdp_time = toc(globtt)-cum-svd
+    total_time = time.perf_counter() - glob_start                       # MATLAB: total_time = toc(globtt)
     log(f"SDP stage: {sdp_time:.3f}s")
     log(f"Total: {total_time:.3f}s")
 
+    # MATLAB: times.total_time / cum_time / svd_time / sdp_time
     times = {
         "total_time": total_time,
         "cum_time": cum_time,

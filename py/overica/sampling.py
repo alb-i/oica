@@ -1,7 +1,9 @@
 """Synthetic data sampling utilities (ports of the ``sampling/`` directory).
 
 Every function below carries the corresponding MATLAB source (verbatim) as a
-comment, with line-by-line annotations describing what each line does.
+comment block, with line-by-line annotations. Inline ``# MATLAB: ...``
+comments inside each body point each Python statement back to the MATLAB
+line(s) it implements (and explain what it actually does).
 """
 
 from __future__ import annotations
@@ -30,8 +32,9 @@ def _as_rng(rng) -> np.random.Generator:
 def sample_mixing_matrix(p: int, k: int, *, rng=None) -> np.ndarray:
     """Sample a ``(p, k)`` Gaussian mixing matrix with unit-norm columns."""
     rng = _as_rng(rng)
-    ds = rng.standard_normal((p, k))
-    ds /= np.linalg.norm(ds, axis=0, keepdims=True)
+    ds = rng.standard_normal((p, k))                         # MATLAB: ds = randn(p,k)
+    ds /= np.linalg.norm(ds, axis=0, keepdims=True)          # MATLAB: ds(:,i) = ds(:,i)/norm(...,2)
+                                                             #          (vectorised: all columns at once)
     return ds
 
 
@@ -46,8 +49,8 @@ def sample_mixing_matrix(p: int, k: int, *, rng=None) -> np.ndarray:
 def sample_orthogonal_matrix(k: int, *, rng=None) -> np.ndarray:
     """Sample an orthogonal ``(k, k)`` matrix via the QR of a random matrix."""
     rng = _as_rng(rng)
-    X = rng.random((k, k))
-    Q, _ = np.linalg.qr(X)
+    X = rng.random((k, k))                                   # MATLAB: X = rand(k)
+    Q, _ = np.linalg.qr(X)                                   # MATLAB: V = orth(X)  (Q is the QR's Q)
     return Q
 
 
@@ -93,29 +96,31 @@ def sample_from_ica_with_uniform_sources(
     """
     rng = _as_rng(rng)
     ds = np.asarray(ds, dtype=float)
-    p, k = ds.shape
+    p, k = ds.shape                                          # MATLAB: [p,k] = size(ds)
 
-    batch = 1000
-    times = N // batch
-    rest = N % batch
+    batch = 1000                                             # MATLAB: n = 1000  (batch size)
+    times = N // batch                                       # MATLAB: times = floor(N/n)
+    rest = N % batch                                         # MATLAB: rest = mod(N,n)
 
-    X = np.empty((p, N))
-    Alpha = np.empty((k, N))
+    X = np.empty((p, N))                                     # MATLAB: X = zeros(p,N)
+    Alpha = np.empty((k, N))                                 # MATLAB: Alpha = zeros(k,N)
 
     def _sample_batch(n):
+        # MATLAB nested fn: alpha = rand(k,n) .* abs(randn(k,n))   (heavy-tailed sources)
         a = rng.random((k, n)) * np.abs(rng.standard_normal((k, n)))
+        # MATLAB nested fn: x = sparse(ds * alpha)                 (dense here; numpy is fast enough)
         return ds @ a, a
 
-    for i in range(times):
-        x, a = _sample_batch(batch)
-        sl = slice(i * batch, (i + 1) * batch)
-        X[:, sl] = x
-        Alpha[:, sl] = a
+    for i in range(times):                                   # MATLAB: for i=1:times
+        x, a = _sample_batch(batch)                          # MATLAB:   [x, alpha] = sample_batch(n)
+        sl = slice(i * batch, (i + 1) * batch)               # MATLAB:   inds = (i-1)*n+1 : i*n
+        X[:, sl] = x                                         # MATLAB:   X(:,inds) = x
+        Alpha[:, sl] = a                                     # MATLAB:   Alpha(:,inds) = alpha
 
-    if rest > 0:
-        x, a = _sample_batch(rest)
-        sl = slice(times * batch, times * batch + rest)
-        X[:, sl] = x
-        Alpha[:, sl] = a
+    if rest > 0:                                             # MATLAB: implicit (handles rest unconditionally)
+        x, a = _sample_batch(rest)                           # MATLAB: [x, alpha] = sample_batch(rest)
+        sl = slice(times * batch, times * batch + rest)      # MATLAB: inds = times*n+1 : times*n+rest
+        X[:, sl] = x                                         # MATLAB: X(:,inds) = x
+        Alpha[:, sl] = a                                     # MATLAB: Alpha(:,inds) = alpha
 
     return X, Alpha

@@ -6,7 +6,9 @@ in columns), matching the original MATLAB convention.
 Throughout, ``vec(M)`` means column-major flattening (MATLAB's ``M(:)``).
 
 Every Python function below is preceded by a comment block containing the
-corresponding MATLAB source (verbatim), annotated line-by-line.
+corresponding MATLAB source (verbatim), annotated line-by-line. Inline
+``# MATLAB: ...`` comments inside each body point each Python statement back
+to its MATLAB equivalent and explain what it does.
 """
 
 from __future__ import annotations
@@ -56,21 +58,22 @@ def gencov(X: np.ndarray, omega: np.ndarray | float) -> np.ndarray:
         ``E_omega[X X^T] - E_omega[X] E_omega[X]^T``.
     """
     X = np.asarray(X, dtype=float)
-    p, _ = X.shape
+    p, _ = X.shape                                           # MATLAB: p = size(X,1); n = size(X,2)
 
     omega = np.asarray(omega, dtype=float)
-    if omega.ndim == 0 or omega.size == 1:
-        omega = float(omega) * np.ones(p) / p
+    if omega.ndim == 0 or omega.size == 1:                   # MATLAB: if numel(omega)==1
+        omega = float(omega) * np.ones(p) / p                # MATLAB:   omega = omega*ones(p,1)/p
     omega = omega.reshape(p)
 
-    proj = X.T @ omega                       # (n,)
-    eproj = np.exp(proj)                     # (n,)
-    s = eproj.sum()
+    proj = X.T @ omega                                       # MATLAB: proj = X' * omega  (n-vector)
+    eproj = np.exp(proj)                                     # MATLAB: eproj = exp(proj)  (n-vector of weights)
+    s = eproj.sum()                                          # MATLAB: sum(eproj)  (normalising constant)
 
-    mean_omega = (X @ eproj) / s             # (p,)
-    C = (X * eproj) @ X.T / s                # (p, p)
-    C = C - np.outer(mean_omega, mean_omega)
-    return _vec_F(C)
+    mean_omega = (X @ eproj) / s                             # MATLAB: Eomega = (X*eproj)/sum(eproj)   (E_ω[X])
+    C = (X * eproj) @ X.T / s                                # MATLAB: C = X*diag(eproj)*X' / sum(eproj)
+                                                             #         (broadcast multiply instead of sparse diag)
+    C = C - np.outer(mean_omega, mean_omega)                 # MATLAB: C = C - Eomega*Eomega'  (covariance)
+    return _vec_F(C)                                         # MATLAB: C = C(:)  (column-major flatten)
 
 
 # ----------------------------------------------------------------------------
@@ -115,26 +118,31 @@ def quadricov(X: np.ndarray) -> np.ndarray:
     """
     X = np.asarray(X, dtype=float)
     p, n = X.shape
-    Xc = X - X.mean(axis=1, keepdims=True)
+    Xc = X - X.mean(axis=1, keepdims=True)                   # MATLAB driver: X = X - repmat(mean(X,2),1,n)
 
     # V[:, i] = vec(x_i x_i^T) in column-major (F) order.
     # Build (p, p, n) outer products then flatten the first two axes in F order.
-    outers = Xc[:, None, :] * Xc[None, :, :]          # (p, p, n)
-    V = outers.reshape(p * p, n, order="F")           # (p*p, n)
+    outers = Xc[:, None, :] * Xc[None, :, :]                 # MATLAB kernel: temp[a+b*p] = data[i][a]*data[i][b]
+                                                             #   (vectorised across all i; gives shape (p,p,n))
+    V = outers.reshape(p * p, n, order="F")                  #   (now V[:,i] = vec(x_i x_i^T), col-major)
 
-    M4 = (V @ V.T) / n                                # (p*p, p*p)
-    C = (Xc @ Xc.T) / n                                # (p, p)
+    M4 = (V @ V.T) / n                                       # MATLAB kernel: Q[a][b] += temp[a]*temp[b]; Q /= n
+                                                             #   (rank-1 outer-product accumulation → V @ V.T)
+    C = (Xc @ Xc.T) / n                                      # MATLAB kernel: C[a][b] += data[i][a]*data[i][b]; C/=n
 
-    # Subtract the three product-of-covariances terms.
-    vecC = _vec_F(C)
-    term1 = np.outer(vecC, vecC)                       # C_{ab} C_{cd}
+    # Subtract the three product-of-covariances terms — the Gaussian "Wick"
+    # contractions that need to be removed to get the genuine 4-th cumulant.
+    vecC = _vec_F(C)                                         # MATLAB: vec(C) (column-major)
+    term1 = np.outer(vecC, vecC)                             # MATLAB: C[a][b] * C[c][d]   (vec(C) · vec(C)')
 
-    # Compute C_{ac} C_{bd} and C_{ad} C_{bc} via index permutations of a
-    # (p, p, p, p) tensor, then flatten back to (p*p, p*p) in F order.
-    C_ac_bd = np.einsum("ac,bd->abcd", C, C).reshape(p * p, p * p, order="F")
-    C_ad_bc = np.einsum("ad,bc->abcd", C, C).reshape(p * p, p * p, order="F")
+    # The other two contractions need an index permutation: we form
+    # T[a,b,c,d] = C[a,c]·C[b,d] (resp. C[a,d]·C[b,c]) as a 4-D tensor and
+    # then flatten back to (p*p, p*p) in column-major order so the index
+    # layout matches MATLAB's Q[a+b*p][c+d*p].
+    C_ac_bd = np.einsum("ac,bd->abcd", C, C).reshape(p * p, p * p, order="F")  # MATLAB: -C[a][c]*C[b][d]
+    C_ad_bc = np.einsum("ad,bc->abcd", C, C).reshape(p * p, p * p, order="F")  # MATLAB: -C[a][d]*C[b][c]
 
-    return M4 - term1 - C_ac_bd - C_ad_bc
+    return M4 - term1 - C_ac_bd - C_ad_bc                    # MATLAB: Q = (already-mirrored upper-tri Q)
 
 
 # ----------------------------------------------------------------------------
@@ -179,29 +187,30 @@ def genquadricov(X: np.ndarray, u: np.ndarray) -> np.ndarray:
     two and last two dimensions are flattened in column-major order.
     """
     X = np.asarray(X, dtype=float)
-    p, N = X.shape
+    p, N = X.shape                                           # MATLAB: [p,N] = size(X)
     u = np.asarray(u, dtype=float).reshape(p)
 
-    Xu = X.T @ u                                      # (N,)
-    expXu = np.exp(1j * Xu)                           # (N,)
-    M0 = expXu.sum() / N
-    M1 = (X @ expXu) / (N * M0)                       # (p,)
+    Xu = X.T @ u                                             # MATLAB: Xu = X' * u   (length-N projection)
+    expXu = np.exp(1j * Xu)                                  # MATLAB: expXu = exp(1i*Xu)   (complex weights)
+    M0 = expXu.sum() / N                                     # MATLAB: M0 = sum(expXu)/N    (char. fn. at u)
+    M1 = (X @ expXu) / (N * M0)                              # MATLAB: M1 = (X*expXu)/(N*M0)  (gen. mean ∈ ℝᵖ)
 
-    Xc = X - M1[:, None]                              # "generalized zero-mean"
+    Xc = X - M1[:, None]                                     # MATLAB: XC = X - repmat(M1,1,N)  (gen. zero-mean)
 
-    # Weighted outer products w_n (x_n x_n^T)
-    outers = Xc[:, None, :] * Xc[None, :, :]          # (p, p, N), real
-    W = expXu                                          # (N,), complex
-    M2 = np.tensordot(outers, W, axes=([2], [0])) / (N * M0)  # (p, p), complex
+    # Weighted outer products w_n (x_n x_n^T) — vectorised replacement for
+    # the MATLAB ``for n=1:N`` loop that accumulates M2 and M4.
+    outers = Xc[:, None, :] * Xc[None, :, :]                 # MATLAB loop: temp = xn * xn^T   (per-sample p×p)
+    W = expXu                                                # MATLAB loop: weight = expXu(n)
+    M2 = np.tensordot(outers, W, axes=([2], [0])) / (N * M0) # MATLAB: M2 = M2 + expXu(n)*temp, then /(N*M0)
 
-    V = outers.reshape(p * p, N, order="F")           # (p*p, N), real
+    V = outers.reshape(p * p, N, order="F")                  # MATLAB: temp(:) is vec(xn xn^T) in col-major order
     # M4 = (1/(N*M0)) * sum_n w_n vec(x_n x_n^T) vec(x_n x_n^T)^T
-    M4 = (V * W[None, :]) @ V.T / (N * M0)            # (p*p, p*p), complex
+    M4 = (V * W[None, :]) @ V.T / (N * M0)                   # MATLAB: M4 += (expXu(n)*temp(:))*temp(:)' / (N*M0)
 
-    # Subtract the three M2 cross terms.
-    vecM2 = M2.reshape(-1, order="F")
-    term1 = np.outer(vecM2, vecM2)                    # M2_{ab} M2_{cd}
-    M2_ac_bd = np.einsum("ac,bd->abcd", M2, M2).reshape(p * p, p * p, order="F")
-    M2_ad_bc = np.einsum("ad,bc->abcd", M2, M2).reshape(p * p, p * p, order="F")
+    # Subtract the three M2 cross (Wick) terms to get the genuine cumulant.
+    vecM2 = M2.reshape(-1, order="F")                        # MATLAB: vec(M2) in column-major
+    term1 = np.outer(vecM2, vecM2)                           # MATLAB: M2(i3,i4)*M2   →  vec(M2)·vec(M2)'
+    M2_ac_bd = np.einsum("ac,bd->abcd", M2, M2).reshape(p * p, p * p, order="F")  # MATLAB: M2(:,i3)*M2(i4,:)
+    M2_ad_bc = np.einsum("ad,bc->abcd", M2, M2).reshape(p * p, p * p, order="F")  # MATLAB: M2(:,i4)*M2(i3,:)
 
-    return M4 - term1 - M2_ac_bd - M2_ad_bc
+    return M4 - term1 - M2_ac_bd - M2_ad_bc                  # MATLAB: temp = M4(:,icol) - <three Wick terms>
